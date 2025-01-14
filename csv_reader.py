@@ -4,5 +4,5 @@ class CsvReader:
         with open(filepath) as f:
             lines = f.readlines()
             if limit is None:
-                return lines
+                return lines[1:]
             return lines[1:limit + 1]

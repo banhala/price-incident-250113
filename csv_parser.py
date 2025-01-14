@@ -16,8 +16,8 @@ class CsvParser:
         pricing_strategy: int = int(columns[2])
         policy_value: int = int(columns[3])
         policy_type: int = int(columns[4])
-        market_sno: int = int(columns[5])
-        goods_sno: int = int(columns[6])
+        market_sno: int = int(columns[5]) if columns[5] else 0
+        goods_sno: int = int(columns[6]) if columns[6] else 0
         discount_method: int = int(columns[7])
         app_type: int = int(columns[8])
         started_at: datetime = cls._parse_datetime_with_tz(columns[9])
@@ -85,8 +85,8 @@ class CsvParser:
         '''
         '''
         columns: list[str] = cls._parse_columns(line=line)
-        market_sno: int = int(columns[0])
-        goods_sno: int = int(columns[1])
+        market_sno: int = int(columns[0]) if columns[0] else 0
+        goods_sno: int = int(columns[1]) if columns[1] else 0
         consumer_origin: int = int(columns[2])
         price_origin: int = int(columns[3])
         total_additional_price: int = int(columns[4])
