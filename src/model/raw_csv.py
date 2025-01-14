@@ -6,6 +6,7 @@ from datetime import datetime
 class RawCsvGoodsOption:
     market_sno: int
     goods_sno: int
+    option_sno: int
     consumer_origin: int
     price_origin: int
     total_additional_price: int
@@ -24,7 +25,7 @@ class RawCsvPolicy:
     pricing_strategy: int
     policy_type: int
     policy_value: int
-    app_type: int
+    # app_type: list[int]
     started_at: datetime
     ended_at: datetime
     operation_type: str

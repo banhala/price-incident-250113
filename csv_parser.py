@@ -1,4 +1,6 @@
+import csv
 from datetime import datetime
+from io import StringIO
 
 import pytz
 
@@ -19,14 +21,11 @@ class CsvParser:
         market_sno: int = int(columns[5]) if columns[5] else 0
         goods_sno: int = int(columns[6]) if columns[6] else 0
         discount_method: int = int(columns[7])
-        app_type: int = int(columns[8])
-        started_at: datetime = cls._parse_datetime_with_tz(columns[9])
-        ended_at = cls._parse_datetime_with_tz(columns[10])
-
-        operation_type: str = columns[11]
-        # deleted: bool = columns[12] == "true"
-        transaction_time: str = columns[13]
-        dt: str = columns[14]
+        started_at: datetime = cls._parse_datetime_with_tz(columns[8])
+        ended_at = cls._parse_datetime_with_tz(columns[9])
+        operation_type: str = columns[10]
+        transaction_time: str = columns[12]
+        dt: str = columns[13]
         policy = RawCsvPolicy(
             is_active=is_active,
             status=status,
@@ -36,7 +35,6 @@ class CsvParser:
             market_sno=market_sno,
             goods_sno=goods_sno,
             discount_method=discount_method,
-            app_type=app_type,
             started_at=started_at,
             ended_at=ended_at,
             operation_type=operation_type,
@@ -87,16 +85,18 @@ class CsvParser:
         columns: list[str] = cls._parse_columns(line=line)
         market_sno: int = int(columns[0]) if columns[0] else 0
         goods_sno: int = int(columns[1]) if columns[1] else 0
-        consumer_origin: int = int(columns[2])
-        price_origin: int = int(columns[3])
-        total_additional_price: int = int(columns[4])
-        operation_type: str = columns[5]
-        deleted: str = columns[6]
-        transaction_time: str = columns[7]
-        dt: str = columns[8]
+        option_sno: int = int(columns[2])
+        consumer_origin: int = int(columns[3])
+        price_origin: int = int(columns[4])
+        total_additional_price: int = int(columns[5])
+        operation_type: str = columns[6]
+        deleted: str = columns[7]
+        transaction_time: str = columns[8]
+        dt: str = columns[9]
         option = RawCsvGoodsOption(
             market_sno=market_sno,
             goods_sno=goods_sno,
+            option_sno=option_sno,
             consumer_origin=consumer_origin,
             price_origin=price_origin,
             total_additional_price=total_additional_price,
@@ -146,5 +146,8 @@ class CsvParser:
 
     @classmethod
     def _parse_columns(cls, line: str) -> list[str]:
-        columns: list[str] = [raw_val[1:-1] for raw_val in line.split(',')]
-        return columns
+        return cls.parse_csv_line_with_csv(line=line)
+
+    @classmethod
+    def parse_csv_line_with_csv(cls, line: str) -> list[str]:
+        return next(csv.reader(StringIO(line)))
