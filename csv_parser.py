@@ -89,10 +89,11 @@ class CsvParser:
         consumer_origin: int = int(columns[3])
         price_origin: int = int(columns[4])
         total_additional_price: int = int(columns[5])
-        operation_type: str = columns[6]
-        deleted: str = columns[7]
-        transaction_time: str = columns[8]
-        dt: str = columns[9]
+        link: int = int(columns[6])
+        is_display: int = int(columns[7])
+        operation_type: str = columns[8]
+        transaction_time: str = columns[9]
+        dt: str = columns[10]
         option = RawCsvGoodsOption(
             market_sno=market_sno,
             goods_sno=goods_sno,
@@ -100,6 +101,8 @@ class CsvParser:
             consumer_origin=consumer_origin,
             price_origin=price_origin,
             total_additional_price=total_additional_price,
+            link=link,
+            is_display=is_display,
             operation_type=operation_type,
             transaction_time=cls._parse_timestamp(timestamp_str=transaction_time),
             dt=dt,

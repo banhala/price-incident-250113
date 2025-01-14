@@ -10,6 +10,8 @@ class RawCsvGoodsOption:
     consumer_origin: int
     price_origin: int
     total_additional_price: int
+    link: int
+    is_display: int
     operation_type: str
     transaction_time: datetime
     dt: str

@@ -1,6 +1,8 @@
 from collections import defaultdict
 from datetime import datetime
+from itertools import islice
 
+from create_revision import CreateRevisionService
 from csv_parser import CsvParser
 from csv_reader import CsvReader
 from deal_serializer import DealSerializer
@@ -23,6 +25,12 @@ output:
 2. form the columns
 3. group by {goods_option_sno: Rev(consumer_origin, price_origin)}
 '''
+
+print('program starts..')
+
+
+def dict_slice(dictionary, start=0, stop=None) -> dict:
+    return dict(islice(dictionary.items(), start, stop))
 
 
 def process_options(limit: int | None) -> None:
@@ -90,16 +98,24 @@ def process_deals(limit: int | None) -> None:
 
 LIMIT: int | None = None
 begin_time: datetime = datetime.now()
-
 # process_options(limit=LIMIT)
 # process_policies(limit=LIMIT)
-process_deals(limit=LIMIT)
-#
-# deals: list[RawCsvDeal] = [
-#     CsvParser.parse_raw_deal(line=line) for line in
-#     CsvReader.read(filepath='data/deals_250107_250113.csv', limit=LIMIT)
-# ]
+# process_deals(limit=LIMIT)
+
+
+serialized_data: bytes = FileSaveHelper.read(filepath='data/processed/option_map.msgpack')
+option_map: dict[int, list[RawCsvGoodsOption]] = OptionSerializer.deserialize_option(data=serialized_data)
+print('option_map: ', len(option_map))
+
+serialized_data: bytes = FileSaveHelper.read(filepath='data/processed/deal_map.msgpack')
+deal_map: dict[int, list[RawCsvDeal]] = DealSerializer.deserialize(data=serialized_data)
+deal_map: dict[int, list[RawCsvDeal]] = dict_slice(deal_map, start=0, stop=10)
+goods_sno_list: list[int] = list(deal_map.keys())
+selected_option_map: dict[int, list[RawCsvGoodsOption]] = {}
+for goods_sno in goods_sno_list:
+    selected_option_map[goods_sno] = option_map[goods_sno]
+revisions = CreateRevisionService.create_revision(deal_map=deal_map, option_map=selected_option_map)
+print('revisions: ', revisions)
+
 end_time: datetime = datetime.now()
 print('elapsed time: ', end_time - begin_time)
-# print('policies: ', (policies))
-# print('deals: ', (deals))
