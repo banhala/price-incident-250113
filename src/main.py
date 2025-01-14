@@ -1,2 +1,0 @@
-class EditRevision:
-    pass
