@@ -3,15 +3,19 @@ from datetime import datetime
 
 import msgpack
 
-from src.model.raw_csv import RawCsvGoodsOption
+from src.model.raw_csv import RawCsvAdj
 
 
-class OptionSerializer:
+class AdjSerializer:
     @classmethod
     def serialize(cls, raw_map: dict[int, list[dataclasses.dataclass]]) -> bytes:
         converted = {
             k: [
-                dataclasses.asdict(opt) | {'transaction_time': opt.transaction_time.isoformat()}
+                dataclasses.asdict(opt) | {
+                    'transaction_time': opt.transaction_time.isoformat(),
+                    'started_at': opt.started_at.isoformat(),
+                    'ended_at': opt.ended_at.isoformat(),
+                }
                 for opt in v
             ]
             for k, v in raw_map.items()
@@ -27,8 +31,13 @@ class OptionSerializer:
         for key, options in data.items():
             # Convert string key back to int
             result[int(key)] = [
-                RawCsvGoodsOption(
-                    **{**opt, 'transaction_time': datetime.fromisoformat(opt['transaction_time'])}
+                RawCsvAdj(
+                    **{
+                        **opt,
+                        'transaction_time': datetime.fromisoformat(opt['transaction_time']),
+                        'started_at': datetime.fromisoformat(opt['started_at']),
+                        'ended_at': datetime.fromisoformat(opt['ended_at']),
+                    }
                 )
                 for opt in options
             ]

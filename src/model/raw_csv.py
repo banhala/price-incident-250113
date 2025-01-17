@@ -27,7 +27,6 @@ class RawCsvPolicy:
     pricing_strategy: int
     policy_type: int
     policy_value: int
-    # app_type: list[int]
     started_at: datetime
     ended_at: datetime
     operation_type: str
@@ -42,11 +41,42 @@ class RawCsvDeal:
     goods_discount_policy_sno: int
     thumbnail_price: int
     is_enabled: bool
-    priority: int
-    app_type: int
-    started_at: datetime
-    ended_at: datetime
+    # priority: int
+    # app_type: int
+    # started_at: datetime
+    # ended_at: datetime
     operation_type: str
-    deleted: bool
+    # deleted: bool
     transaction_time: datetime
     dt: str
+
+
+@dataclasses.dataclass(frozen=True)
+class RawCsvAdj:
+    market_sno: int
+    goods_sno: int
+    discount_type: int
+    discount_price: int
+    started_at: datetime
+    ended_at: datetime
+    # created_at: datetime
+    # updated_at: datetime
+    operation_type: str
+    transaction_time: datetime
+    dt: str
+
+
+@dataclasses.dataclass(frozen=True)
+class RawCsvPlatformConsumer:
+    sno: int
+    goods_sno: int
+    consumer_origin: int
+    total_additional_price: int
+    app_type: int
+    # created_at: datetime
+    # updated_at: datetime
+    operation_type: str
+    transaction_time: datetime
+    dt: str
+
+

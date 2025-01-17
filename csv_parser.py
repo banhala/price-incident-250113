@@ -4,10 +4,16 @@ from io import StringIO
 
 import pytz
 
-from src.model.raw_csv import RawCsvGoodsOption, RawCsvPolicy, RawCsvDeal
+from src.model.raw_csv import RawCsvGoodsOption, RawCsvPolicy, RawCsvDeal, RawCsvAdj, RawCsvPlatformConsumer
 
 
 class CsvParser:
+    @classmethod
+    def parse_raw_goods(cls, line: str) -> int:
+        columns: list[str] = cls._parse_columns(line=line)
+        goods_sno: int = int(columns[0])
+        return goods_sno
+
     @classmethod
     def parse_raw_policy(cls, line: str) -> RawCsvPolicy:
         '''
@@ -26,7 +32,7 @@ class CsvParser:
         operation_type: str = columns[10]
         transaction_time: str = columns[12]
         dt: str = columns[13]
-        policy = RawCsvPolicy(
+        return RawCsvPolicy(
             is_active=is_active,
             status=status,
             pricing_strategy=pricing_strategy,
@@ -41,42 +47,28 @@ class CsvParser:
             transaction_time=cls._parse_timestamp(timestamp_str=transaction_time),
             dt=dt,
         )
-        return policy
 
     @classmethod
     def parse_raw_deal(cls, line: str) -> RawCsvDeal:
-        '''
-        '''
         columns: list[str] = [raw_val[1:-1] for raw_val in line.split(',')]
         sno: int = int(columns[0])
         goods_sno: int = int(columns[1])
         goods_discount_policy_sno: int = int(columns[2])
         thumbnail_price: int = int(float(columns[3]))
         is_enabled: bool = columns[4] == "true"
-        priority: int = int(columns[5])
-        app_type: int = int(columns[6])
-        started_at: datetime = cls._parse_datetime_with_tz(columns[7])
-        ended_at: datetime = cls._parse_datetime_with_tz(columns[8])
-        operation_type: str = columns[9]
-        deleted: bool = columns[10] == "true"
-        transaction_time: str = columns[11]
-        dt: str = columns[12]
-        deal = RawCsvDeal(
+        operation_type: str = columns[5]
+        transaction_time: str = columns[6]
+        dt: str = columns[7]
+        return RawCsvDeal(
             sno=sno,
             goods_sno=goods_sno,
             goods_discount_policy_sno=goods_discount_policy_sno,
             thumbnail_price=thumbnail_price,
             is_enabled=is_enabled,
-            priority=priority,
-            app_type=app_type,
-            started_at=started_at,
-            ended_at=ended_at,
             operation_type=operation_type,
-            deleted=deleted,
             transaction_time=cls._parse_timestamp(timestamp_str=transaction_time),
             dt=dt,
         )
-        return deal
 
     @classmethod
     def parse_raw_option(cls, line: str) -> RawCsvGoodsOption:
@@ -94,7 +86,7 @@ class CsvParser:
         operation_type: str = columns[8]
         transaction_time: str = columns[9]
         dt: str = columns[10]
-        option = RawCsvGoodsOption(
+        return RawCsvGoodsOption(
             market_sno=market_sno,
             goods_sno=goods_sno,
             option_sno=option_sno,
@@ -107,7 +99,52 @@ class CsvParser:
             transaction_time=cls._parse_timestamp(timestamp_str=transaction_time),
             dt=dt,
         )
-        return option
+
+    @classmethod
+    def parse_raw_adj(cls, line: str) -> RawCsvAdj:
+        columns: list[str] = cls._parse_columns(line=line)
+        market_sno: int = int(columns[0])
+        goods_sno: int = int(columns[1])
+        discount_type: int = int(columns[2])
+        discount_price: int = int(columns[3])
+        started_at: datetime = cls._parse_datetime_with_tz(columns[4])
+        ended_at: datetime = cls._parse_datetime_with_tz(columns[5])
+        operation_type: str = columns[8]
+        transaction_time: str = columns[9]
+        dt: str = columns[10]
+        return RawCsvAdj(
+            market_sno=market_sno,
+            goods_sno=goods_sno,
+            discount_type=discount_type,
+            discount_price=discount_price,
+            started_at=started_at,
+            ended_at=ended_at,
+            operation_type=operation_type,
+            transaction_time=cls._parse_timestamp(timestamp_str=transaction_time),
+            dt=dt,
+        )
+
+    @classmethod
+    def parse_raw_platform_consumer(cls, line: str) -> RawCsvPlatformConsumer:
+        columns: list[str] = cls._parse_columns(line=line)
+        sno: int = int(columns[0])
+        goods_sno: int = int(columns[1])
+        consumer_origin: int = int(columns[2])
+        total_additional_price: int = int(columns[3])
+        app_type: int = int(columns[4])
+        operation_type: str = columns[7]
+        transaction_time: str = columns[8]
+        dt: str = columns[9]
+        return RawCsvPlatformConsumer(
+            sno=sno,
+            goods_sno=goods_sno,
+            consumer_origin=consumer_origin,
+            total_additional_price=total_additional_price,
+            app_type=app_type,
+            operation_type=operation_type,
+            transaction_time=cls._parse_timestamp(timestamp_str=transaction_time),
+            dt=dt,
+        )
 
     @classmethod
     def _parse_timestamp(cls, timestamp_str: str) -> datetime:

@@ -13,8 +13,6 @@ class DealSerializer:
             k: [
                 dataclasses.asdict(opt) | {
                     'transaction_time': opt.transaction_time.isoformat(),
-                    'started_at': opt.started_at.isoformat(),
-                    'ended_at': opt.ended_at.isoformat(),
                 }
                 for opt in v
             ]
@@ -35,8 +33,6 @@ class DealSerializer:
                     **{
                         **opt,
                         'transaction_time': datetime.fromisoformat(opt['transaction_time']),
-                        'started_at': datetime.fromisoformat(opt['started_at']),
-                        'ended_at': datetime.fromisoformat(opt['ended_at']),
                     }
                 )
                 for opt in options
