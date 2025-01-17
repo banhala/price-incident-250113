@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from io import StringIO
 
 from file_save_helper import FileSaveHelper
+from src.util import discard_ones_digit
 
 
 @dataclasses.dataclass(frozen=False)
@@ -225,7 +226,7 @@ class ItemAnalyzer:
             )
             ctx.goods_name = item.goods_name
             context_map[item.goods_sno] = ctx
-            if ctx.correct_price > item.price and ctx.goods_sno != -1:
+            if ctx.correct_price != item.price and ctx.goods_sno != -1:
                 res.append(
                     InvalidData(
                         context=copy.deepcopy(ctx),
@@ -254,14 +255,159 @@ class ItemAnalyzer:
 
     @classmethod
     def calc_correct_price(cls, log: DatadogLog) -> int:
-        consumer_origin: int = log.consumer_origin if log.consumer_origin > 0 else 0
-        price_origin: int = log.price_origin if log.price_origin > 0 else 0
-        if consumer_origin * price_origin != 0:
-            # 이미 할인판매가가 저장되어있다.
-            return min([consumer_origin, price_origin])
+        '''
+        algorithm.
 
-        discount_price: int = log.discount_price if log.discount_price > 0 else 0
-        return (consumer_origin or price_origin) - discount_price
+        정가: [max(consumer_origin, price_origin)]
+        할인: [
+            정가 * discount_rate,
+            discount_price,
+            consumer_diff,
+        ]
+        '''
+        consumer: int = cls._get_best_consumer(
+            consumer_origin=log.consumer_origin,
+            price_origin=log.price_origin,
+        )
+        discount: int = cls._get_best_discount(
+            consumer=consumer,
+            discount_price=log.discount_price,
+            discount_type=log.discount_type,
+            discount_rate=log.discount_rate,
+            diff=abs(log.consumer_origin - log.price_origin),
+            started_at=log.discount_started_at,
+            ended_at=log.discount_ended_at,
+            checked_at=log.request_time,
+        )
+        return consumer - discount
+
+    @classmethod
+    def _get_best_consumer(cls, consumer_origin: int, price_origin: int) -> int:
+        return max([consumer_origin, price_origin])
+
+    @classmethod
+    def _get_best_discount(
+            cls,
+            consumer: int,
+            discount_price: int,
+            discount_type: int,
+            discount_rate: int,
+            diff: int,
+            started_at: datetime,
+            ended_at: datetime,
+            checked_at: datetime,
+    ) -> int:
+        adj_discount_price: int = cls._get_consumer_price_adj_discount(
+            consumer=consumer,
+            discount_price=discount_price,
+            discount_type=discount_type,
+            discount_rate=discount_rate,
+            started_at=started_at,
+            ended_at=ended_at,
+            checked_at=checked_at,
+        )
+        return adj_discount_price or diff
+
+    @classmethod
+    def _get_consumer_price_adj_discount(
+            cls,
+            consumer: int,
+            discount_price: int,
+            discount_type: int,
+            discount_rate: int,
+            started_at: datetime,
+            ended_at: datetime,
+            checked_at: datetime,
+    ) -> int:
+        can_discount: bool = started_at <= checked_at <= ended_at
+        if discount_type == 1 and discount_rate > 0 and discount_price == 0:
+            # 정률
+            res = discard_ones_digit(
+                consumer * discount_rate
+            )
+            if can_discount:
+                return res if res > 0 else 0
+
+        if can_discount:
+            # 단가
+            res = discard_ones_digit(discount_price if discount_price > 0 else 0)
+            return res
+
+        return 0
+
+
+class DataPrinter:
+    @classmethod
+    def print(cls, data: list[InvalidData], goods_set: set[int]) -> None:
+        # Print header
+        print("\n" + "=" * 150)
+        print(
+            f"{'Goods Name':<40} | {'SNO':>8} | {'Price':>10} | {'Correct':>10} | {'Diff':>8} | {'Checked At':^20} | {'Updated At':^20}")
+        print("-" * 150)
+
+        # Print each row
+        for invalid in data:
+            if invalid.context.goods_sno not in goods_set:
+                continue
+
+            goods_name: str = invalid.context.goods_name[:37] + "..." if len(
+                invalid.context.goods_name) > 40 else invalid.context.goods_name
+            goods_sno: int = invalid.context.goods_sno
+            price: int = invalid.item.price
+            correct_price: int = invalid.context.correct_price
+            price_diff: int = correct_price - price
+            checked_at: datetime = invalid.item.checked_at
+            updated_at: datetime = invalid.context.updated_at
+
+            print(
+                f"{goods_name:<40} | "
+                f"{goods_sno:>8} | "
+                f"{price:>10,d} | "
+                f"{correct_price:>10,d} | "
+                f"{price_diff:>8,d} | "
+                f"{checked_at.strftime('%Y-%m-%d %H:%M')} | "
+                f"{updated_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+
+        print("=" * 150 + "\n")
+
+    @classmethod
+    def map_csv(cls, data: list[InvalidData]) -> bytes:
+        # Define headers
+        headers = [
+            'goods_name',
+            'goods_sno',
+            'price',
+            'correct_price',
+            'price_diff',
+            'checked_at',
+            'updated_at',
+            'market_sno',
+            'order_sno',
+            'item_sno'
+        ]
+
+        # Create CSV content starting with headers
+        lines = [','.join(headers)]
+
+        # Add data rows
+        for invalid in data:
+            row = [
+                f'"{invalid.context.goods_name}"',  # Quote the name to handle commas
+                str(invalid.context.goods_sno),
+                str(invalid.item.price),
+                str(invalid.context.correct_price),
+                str(invalid.context.correct_price - invalid.item.price),
+                invalid.item.checked_at.strftime('%Y-%m-%d %H:%M:%S'),
+                invalid.context.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+                str(invalid.item.market_sno),
+                str(invalid.item.order_sno),
+                str(invalid.item.item_sno)
+            ]
+            lines.append(','.join(row))
+
+        # Join with newlines and encode to bytes
+        return '\n'.join(lines).encode('utf-8')
 
 
 if __name__ == '__main__':
@@ -270,17 +416,11 @@ if __name__ == '__main__':
         lines=LogReader.read(filepaths=['data/spainshop1.csv', 'data/spainshop2.csv']),
     )
     items: list[OrderItem] = ItemReader.parse(lines=ItemReader.read(filepaths=['data/spain_items.csv']))
+    invalids: list[InvalidData] = ItemAnalyzer.analyze(logs=logs, items=items)
+
     print('len(logs): ', len(logs))
     print('len(items): ', len(items))
-
-    invalids: list[InvalidData] = ItemAnalyzer.analyze(logs=logs, items=items)
-    # for invalid in invalids:
-    #     goods_name: str = invalid.context.goods_name
-    #     goods_sno: int = invalid.context.goods_sno
-    #     price: int = invalid.item.price
-    #     correct_price: int = invalid.context.correct_price
-    #     checked_at: datetime = invalid.item.checked_at
-    #     updated_at: datetime = invalid.context.updated_at
-    #     print(f'name: {goods_name}, sno: {goods_sno}, price: {price}, correct_price: {correct_price}, checked_at: {checked_at}, updated_at: {updated_at}')
     print('len(invalids): ', len(invalids))
     print('unique goods: ', len(set([invalid.context.goods_sno for invalid in invalids])))
+    FileSaveHelper.save(data=DataPrinter.map_csv(data=invalids), filepath='data/invalids_spainshop.csv')
+    DataPrinter.print(data=invalids, goods_set={29171090})
