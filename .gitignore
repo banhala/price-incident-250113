@@ -1,5 +1,7 @@
 data/*.csv
 data/processed/**
+data/o.jsonl
+data/logs/
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,pycharm,macos,vim
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,pycharm,macos,vim

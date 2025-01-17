@@ -1,6 +1,8 @@
 import copy
 import csv
 import dataclasses
+import json
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from io import StringIO
@@ -42,6 +44,7 @@ class OrderItem:
     item_sno: int
     order_sno: int
     market_sno: int
+    option_sno: int
     goods_sno: int
     goods_name: str
     quantity: int
@@ -58,7 +61,7 @@ class InvalidData:
 
 class ReaderUtil:
     @classmethod
-    def parse_value(cls, value: str) -> str | int:
+    def parse_value(cls, value: str) -> str:
         """Parse a CSV value that might be wrapped in quotes or be a plain integer."""
         # Strip quotes if present
         if value.startswith('"') and value.endswith('"'):
@@ -68,39 +71,199 @@ class ReaderUtil:
     @classmethod
     def parse_int(cls, value: str) -> int:
         """Parse a value into an integer, handling quoted strings."""
-        cleaned_value = cls.parse_value(value)
-        return int(cleaned_value)
+        if value == '':
+            return -1
+
+        cleaned_value: str = cls.parse_value(value)
+        try:
+            return int(cleaned_value.replace("'", ""))
+        except ValueError:
+            return int(float(cleaned_value))
 
     @classmethod
     def parse_csv_line_with_csv(cls, line: str) -> list[str]:
         return next(csv.reader(StringIO(line)))
 
 
-class LogReader:
-    HEADERS: list[str] = [
-        "Date",
-        "ably_market_sno",
-        "@ably_sno",
-        "consumer_origin",
-        "@price_origin",
-        "@consumer_price_adjustment.discount_type",
-        "@consumer_price_adjustment.discount_rate",
-        "@consumer_price_adjustment.discount_price",
-        "@consumer_price_adjustment.ended_at",
-        "@consumer_price_adjustment.started_at",
-        "Message",
-    ]
-
+class GrafanaLogReader:
     @classmethod
-    def read(cls, filepaths: list[str]) -> list[str]:
+    def read(cls, filepaths: list[str], limit: int | None) -> list[str]:
+        print('grafana read log starts...')
         res: list[str] = []
         for filepath in filepaths:
             data: bytes = FileSaveHelper.read(filepath=filepath)
+            print('bytes loaded..')
             decoded = data.decode('utf-8')
-            lines = decoded.splitlines()
+            if limit:
+                lines: list[str] = decoded.splitlines()[:limit]
+            else:
+                lines: list[str] = decoded.splitlines()
 
-            # Skip header
-            res.extend(lines[1:])
+            print('lines: ', len(lines))
+            for line in lines:
+                res.append(cls._extract_log_data(line))
+
+        return res
+
+    @classmethod
+    def _extract_log_data(cls, line: str) -> str:
+        try:
+            data: dict = json.loads(line)
+        except json.JSONDecodeError:
+            return line
+        return data.get("line")
+
+
+class SellerLogReader:
+    @classmethod
+    def read(cls, filepaths: list[str] = None, file_dir_path: str = None) -> list[str]:
+        if filepaths:
+            for filepath in filepaths:
+                data: bytes = FileSaveHelper.read(filepath=filepath)
+                decoded = data.decode('utf-8')
+                lines = decoded.splitlines()
+                return lines
+        return []
+
+    @classmethod
+    def parse(cls, lines: list[str]) -> list[DatadogLog]:
+        res: list[DatadogLog] = []
+        for line in lines[1:]:
+            columns: list[str] = ReaderUtil.parse_csv_line_with_csv(line=line)
+            data = cls._parse_csv_line(line=columns)
+            if data:
+                res.append(data)
+        return sorted(res, key=lambda x: x.request_time)
+
+    @classmethod
+    def _parse_csv_line(cls, line: list[str]) -> DatadogLog | None:
+        '''
+        Date, 0
+        ably_market_sno, 1
+        @ably_sno, 2
+        @prices, 3
+        consumer_origin, 4
+        @price_origin, 5
+        @consumer_price_adjustment.discount_type, 6
+        @consumer_price_adjustment.discount_rate, 7
+        @consumer_price_adjustment.discount_price, 8
+        @consumer_price_adjustment.ended_at, 9
+        @consumer_price_adjustment.started_at, 10
+        Message 11
+
+        "2025-01-02T23:47:16.270Z","18675","""37364075""",,"43000","14900","0","0","28100",,,"update_seller_goods"
+        "2025-01-08T02:09:39.868Z","32368","""21503547""","[{""app_type"":0,""discount_policy"":{""policy_type"":0,""policy_value"":111000},""consumer"":1800000},{""app_type"":1,""discount_policy"":{""policy_type"":0,""policy_value"":111000},""consumer"":1800000}]",,,,,,,,"update_seller_goods"
+        '''
+        dt: datetime = cls._parse_datetime(line[0]) + timedelta(hours=9)
+        started_at: datetime = cls._parse_datetime(line[9], datetime(1970, 1, 1))
+        ended_at: datetime = cls._parse_datetime(line[10], datetime(9999, 12, 31))
+        prices: list[dict] = json.loads(line[3]) if line[3] else []
+        if prices:
+            app_price: dict = prices[0]
+            discount_type: int = app_price.get("discount_policy", {}).get("policy_type", 0)
+            app_consumer: int = app_price.get("consumer")
+            discount_value: int = app_price.get("discount_policy", {}).get("policy_value", 0)
+            discount_price: int = discard_ones_digit(discount_value)
+            if discount_type == 1 and discount_value > 0:
+                # 정률
+                discount_price = app_consumer * discount_value
+
+            started_at: datetime = app_price.get("discount_policy", {}).get("started_at", datetime(1970, 1, 1))
+            ended_at: datetime = app_price.get("discount_policy", {}).get("ended_at", datetime(9999, 12, 31))
+            return DatadogLog(
+                market_sno=ReaderUtil.parse_int(line[1]),
+                goods_sno=ReaderUtil.parse_int(line[2]),
+                consumer_origin=app_consumer,
+                price_origin=ReaderUtil.parse_int(line[5]),
+                discount_type=0,
+                discount_rate=0,
+                discount_price=discount_price,
+                discount_started_at=cls._parse_datetime(started_at, datetime(1970, 1, 1)),
+                discount_ended_at=cls._parse_datetime(ended_at, datetime(9999, 12, 31)),
+                request_time=dt,
+            )
+        else:
+            return DatadogLog(
+                market_sno=ReaderUtil.parse_int(line[1]),
+                goods_sno=ReaderUtil.parse_int(line[2]),
+                consumer_origin=ReaderUtil.parse_int(line[4]),
+                price_origin=ReaderUtil.parse_int(line[5]),
+                discount_type=ReaderUtil.parse_int(line[6]) if line[6] else -1,
+                discount_rate=ReaderUtil.parse_int(line[7]) if line[7] else -1,
+                discount_price=ReaderUtil.parse_int(line[8]) if line[8] else -1,
+                discount_started_at=started_at,
+                discount_ended_at=ended_at,
+                request_time=dt,
+            )
+
+    @classmethod
+    def _parse_datetime(cls, datetime_str: str | datetime, default_dt: datetime = None) -> datetime | None:
+        '''
+        Parses datetime strings in formats:
+        - "2025-01-13 04:48:59.005"     # With milliseconds, space separator
+        - "2025-01-13T04:48:59.005Z"    # With milliseconds, ISO format
+        - "2025-01-03T06:50:06Z"        # Without milliseconds, ISO format
+        '''
+        if isinstance(datetime_str, datetime):
+            return datetime_str
+
+        cleaned_str = datetime_str.strip('"')
+        if cleaned_str == "":
+            return default_dt
+
+        # Replace comma with period for proper datetime parsing
+        cleaned_str = cleaned_str.replace(',', '.')
+
+        formats_to_try = [
+            "%Y-%m-%d %H:%M:%S.%f",  # With milliseconds, space separator
+            "%Y-%m-%dT%H:%M:%S.%fZ",  # With milliseconds, ISO format
+            "%Y-%m-%dT%H:%M:%SZ"  # Without milliseconds, ISO format
+        ]
+
+        for date_format in formats_to_try:
+            try:
+                return datetime.strptime(cleaned_str, date_format)
+            except ValueError:
+                continue
+
+        return default_dt
+
+
+class LogReader:
+    HEADERS: list[str] = [
+        "Date",  # 0
+        "Host",  # 1
+        "Service"  # 2
+        "@ably_sno",  # 3
+        "ably_market_sno",  # 4
+        "consumer_origin",  # 5
+        "@price_origin",  # 6
+        "@consumer_price_adjustment.discount_type",  # 7
+        "@consumer_price_adjustment.discount_rate",  # 8
+        "@consumer_price_adjustment.discount_price",  # 9
+        "@consumer_price_adjustment.started_at",  # 10
+        "@consumer_price_adjustment.ended_at",  # 11
+        "Message",  # 12
+    ]
+
+    @classmethod
+    def read(cls, filepaths: list[str] = None, file_dir_path: str = None) -> list[str]:
+        res: list[str] = []
+        if filepaths:
+            for filepath in filepaths:
+                data: bytes = FileSaveHelper.read(filepath=filepath)
+                decoded = data.decode('utf-8')
+                lines = decoded.splitlines()
+
+                # Skip header
+                res.extend(lines[1:])
+        elif file_dir_path:
+            for filename in os.listdir(f"{os.getcwd()}/{file_dir_path}"):
+                data: bytes = FileSaveHelper.read(filepath=f"{file_dir_path}{filename}")
+                print(f"{file_dir_path}{filename}")
+                decoded = data.decode('utf-8')
+                lines = decoded.splitlines()
+                res.extend(lines[1:])
 
         return res
 
@@ -109,56 +272,60 @@ class LogReader:
         res: list[DatadogLog] = []
         for line in lines:
             columns: list[str] = ReaderUtil.parse_csv_line_with_csv(line=line)
-            res.append(cls._parse_csv_line(line=columns))
+            data = cls._parse_csv_line(line=columns)
+            if data:
+                res.append(data)
         return sorted(res, key=lambda x: x.request_time)
 
     @classmethod
-    def _parse_csv_line(cls, line: list[str]) -> DatadogLog:
-        dt: datetime = datetime.fromisoformat(line[0].replace('Z', '+00:00')) + timedelta(hours=9)
-        started_at: datetime = (
-            datetime.fromisoformat(ReaderUtil.parse_value(line[9]).replace('Z', '+00:00'))
-            if line[9] else datetime(1970, 1, 1)
-        )
-        ended_at: datetime = (
-            datetime.fromisoformat(ReaderUtil.parse_value(line[8]).replace('Z', '+00:00'))
-            if line[8] else datetime(9999, 12, 31)
-        )
+    def _parse_csv_line(cls, line: list[str]) -> DatadogLog | None:
+        '''
+        33878,33056035,69000,62500,6500,,0,"2025-01-13T00:00:00Z","2999-12-31T23:59:59Z","2025-01-13 22:47:10,781",vendor_seller_update_goods
+        {{.ably_market_sno}}, 0
+        {{.ably_sno}}, 1
+        {{.consumer_origin}}, 2
+        {{.price_origin}}, 3
+        {{.consumer_price_adjustment_discount_price}}, 4
+        {{.consumer_price_adjustment_discount_rate}}, 5
+        {{.consumer_price_adjustment_discount_type}}, 6
+        "{{.consumer_price_adjustment_started_at}}", 7
+        "{{.consumer_price_adjustment_ended_at}}", 8
+        "{{.asctime}}", 9
+        {{.message}} 10
+        '''
+        message = line[10]
+        if message != "vendor_seller_update_goods":
+            return None
+
+        dt: datetime = cls._parse_datetime(line[9])
+        started_at: datetime = cls._parse_datetime(line[7], datetime(1970, 1, 1))
+        ended_at: datetime = cls._parse_datetime(line[8], datetime(9999, 12, 31))
         return DatadogLog(
-            market_sno=ReaderUtil.parse_int(line[1]),
-            goods_sno=ReaderUtil.parse_int(line[2]),
-            consumer_origin=ReaderUtil.parse_int(line[3]),
-            price_origin=ReaderUtil.parse_int(line[4]),
-            discount_type=ReaderUtil.parse_int(line[5]) if line[5] else -1,
-            discount_rate=ReaderUtil.parse_int(line[6]) if line[6] else -1,
-            discount_price=ReaderUtil.parse_int(line[7]) if line[7] else -1,
-            discount_started_at=datetime(
-                year=started_at.year,
-                month=started_at.month,
-                day=started_at.day,
-                hour=started_at.hour,
-                minute=started_at.minute,
-                second=started_at.second,
-                microsecond=started_at.microsecond,
-            ),
-            discount_ended_at=datetime(
-                year=ended_at.year,
-                month=ended_at.month,
-                day=ended_at.day,
-                hour=ended_at.hour,
-                minute=ended_at.minute,
-                second=ended_at.second,
-                microsecond=ended_at.microsecond,
-            ),
-            request_time=datetime(
-                year=dt.year,
-                month=dt.month,
-                day=dt.day,
-                hour=dt.hour,
-                minute=dt.minute,
-                second=dt.second,
-                microsecond=dt.microsecond,
-            ),
+            market_sno=ReaderUtil.parse_int(line[0]),
+            goods_sno=ReaderUtil.parse_int(line[1]),
+            consumer_origin=ReaderUtil.parse_int(line[2]),
+            price_origin=ReaderUtil.parse_int(line[3]),
+            discount_type=ReaderUtil.parse_int(line[6]) if line[6] else -1,
+            discount_rate=ReaderUtil.parse_int(line[5]) if line[5] else -1,
+            discount_price=ReaderUtil.parse_int(line[4]) if line[4] else -1,
+            discount_started_at=started_at,
+            discount_ended_at=ended_at,
+            request_time=dt,
         )
+
+    @classmethod
+    def _parse_datetime(cls, datetime_str: str, default_dt: datetime = None) -> datetime | None:
+        cleaned_str = datetime_str.strip('"')
+        if cleaned_str == "":
+            return default_dt
+
+        # Replace comma with period for proper datetime parsing
+        cleaned_str = cleaned_str.replace(',', '.')
+
+        try:
+            return datetime.strptime(cleaned_str, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            return default_dt
 
 
 class ItemReader:
@@ -166,6 +333,7 @@ class ItemReader:
     def read(cls, filepaths: list[str]) -> list[str]:
         res: list[str] = []
         for filepath in filepaths:
+            print("filepath: ", filepath)
             data: bytes = FileSaveHelper.read(filepath=filepath)
             decoded = data.decode('utf-8')
             lines = decoded.splitlines()
@@ -181,29 +349,31 @@ class ItemReader:
         sno, 0
         ordno, 1
         market_sno, 2
-        goodsno, 3
-        goodsnm, 4
-        price, 5
+        goods_option_sno, 3
+        goodsno, 4
+        goodsnm, 5
+        price, 6
         memberdc,
         emoney,
         coupon,
-        ea, 9
+        ea, 10
         reserve,
-        checked_at 11
+        checked_at 12
         '''
         res: list[OrderItem] = []
         for line in lines:
             columns: list[str] = ReaderUtil.parse_csv_line_with_csv(line=line)
-            checked_at: datetime = datetime.strptime(columns[11], "%Y-%m-%d %H:%M:%S.%f")
+            checked_at: datetime = datetime.strptime(columns[12], "%Y-%m-%d %H:%M:%S.%f")
             res.append(
                 OrderItem(
                     item_sno=ReaderUtil.parse_int(columns[0]),
                     order_sno=ReaderUtil.parse_int(columns[1]),
                     market_sno=int(columns[2]),
-                    goods_sno=ReaderUtil.parse_int(columns[3]),
-                    goods_name=columns[4],
-                    price=ReaderUtil.parse_int(columns[5]),
-                    quantity=ReaderUtil.parse_int(columns[9]),
+                    option_sno=int(columns[3]),
+                    goods_sno=ReaderUtil.parse_int(columns[4]),
+                    goods_name=columns[5],
+                    price=ReaderUtil.parse_int(columns[6]),
+                    quantity=ReaderUtil.parse_int(columns[10]),
                     checked_at=checked_at,
                 )
             )
@@ -347,7 +517,7 @@ class DataPrinter:
 
         # Print each row
         for invalid in data:
-            if invalid.context.goods_sno not in goods_set:
+            if goods_set and invalid.context.goods_sno not in goods_set:
                 continue
 
             goods_name: str = invalid.context.goods_name[:37] + "..." if len(
@@ -375,8 +545,9 @@ class DataPrinter:
     def map_csv(cls, data: list[InvalidData]) -> bytes:
         # Define headers
         headers = [
-            'goods_name',
+            # 'goods_name',
             'goods_sno',
+            'option_sno',
             'price',
             'correct_price',
             'price_diff',
@@ -393,8 +564,9 @@ class DataPrinter:
         # Add data rows
         for invalid in data:
             row = [
-                f'"{invalid.context.goods_name}"',  # Quote the name to handle commas
+                # f'"{invalid.context.goods_name}"',  # Quote the name to handle commas
                 str(invalid.context.goods_sno),
+                str(invalid.item.option_sno),
                 str(invalid.item.price),
                 str(invalid.context.correct_price),
                 str(invalid.context.correct_price - invalid.item.price),
@@ -409,18 +581,30 @@ class DataPrinter:
         # Join with newlines and encode to bytes
         return '\n'.join(lines).encode('utf-8')
 
+    @classmethod
+    def encode_bytes(cls, lines: list[str]) -> bytes:
+        return '\n'.join(lines).encode('utf-8')
+
 
 if __name__ == '__main__':
     print('program starts to parse..')
-    logs: list[DatadogLog] = LogReader.parse(
-        lines=LogReader.read(filepaths=['data/spainshop1.csv', 'data/spainshop2.csv']),
+    # lines: list[str] = GrafanaLogReader.read(filepaths=['data/logs/o.jsonl'], limit=None)
+    # lines: list[str] = GrafanaLogReader.read(filepaths=['data/logs/o.jsonl'], limit=None)
+    # FileSaveHelper.save(data=DataPrinter.encode_bytes(lines=lines), filepath='data/parsed_logs.csv')
+    # for line in lines:
+    #     print('grafana-line: ', line)
+    vendor_logs: list[DatadogLog] = LogReader.parse(lines=LogReader.read(file_dir_path="data/logs/"))
+    seller_logs: list[DatadogLog] = SellerLogReader.parse(
+        lines=SellerLogReader.read(filepaths=["data/seller_logs.csv"])
     )
-    items: list[OrderItem] = ItemReader.parse(lines=ItemReader.read(filepaths=['data/spain_items.csv']))
+    logs: list[DatadogLog] = sorted(vendor_logs + seller_logs, key=lambda x: x.request_time)
+    items: list[OrderItem] = ItemReader.parse(lines=ItemReader.read(filepaths=['data/ably_gd_order_item.csv']))
+    print('logs: ', len(logs))
     invalids: list[InvalidData] = ItemAnalyzer.analyze(logs=logs, items=items)
 
-    print('len(logs): ', len(logs))
+    print('len(vendor_logs): ', len(vendor_logs))
     print('len(items): ', len(items))
     print('len(invalids): ', len(invalids))
     print('unique goods: ', len(set([invalid.context.goods_sno for invalid in invalids])))
-    FileSaveHelper.save(data=DataPrinter.map_csv(data=invalids), filepath='data/invalids_spainshop.csv')
-    DataPrinter.print(data=invalids, goods_set={29171090})
+    FileSaveHelper.save(data=DataPrinter.map_csv(data=invalids), filepath='data/invalids_order_items.csv')
+    # DataPrinter.print(data=invalids, goods_set=set())
