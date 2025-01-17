@@ -1,16 +1,19 @@
+import copy
 import csv
 import dataclasses
+from collections import defaultdict
 from datetime import datetime, timedelta
 from io import StringIO
 
-from csv_parser import CsvParser
 from file_save_helper import FileSaveHelper
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=False)
 class GoodsContext:
     goods_sno: int = -1
+    goods_name: str = ''
     thumbnail_price: int = -1
+    correct_price: int = -1
     consumer_origin: int = -1
     price_origin: int = -1
     discount_type: int = -1
@@ -43,6 +46,13 @@ class OrderItem:
     quantity: int
     price: int
     checked_at: datetime
+
+
+@dataclasses.dataclass(frozen=True)
+class InvalidData:
+    context: GoodsContext
+    log: DatadogLog
+    item: OrderItem
 
 
 class ReaderUtil:
@@ -196,7 +206,62 @@ class ItemReader:
                     checked_at=checked_at,
                 )
             )
+        return sorted(res, key=lambda x: x.checked_at)
+
+
+class ItemAnalyzer:
+    @classmethod
+    def analyze(cls, logs: list[DatadogLog], items: list[OrderItem]) -> list[InvalidData]:
+        res: list[InvalidData] = []
+        context_map: dict[int, GoodsContext] = defaultdict(GoodsContext)
+        goods_map: dict[int, list[DatadogLog]] = defaultdict(list)
+        for log in logs:
+            goods_map[log.goods_sno].append(log)
+
+        for item in items:
+            checked_at: datetime = item.checked_at
+            ctx = cls._apply_updates(
+                ctx=context_map[item.goods_sno], logs=goods_map[item.goods_sno], checked_at=checked_at
+            )
+            ctx.goods_name = item.goods_name
+            context_map[item.goods_sno] = ctx
+            if ctx.correct_price > item.price and ctx.goods_sno != -1:
+                res.append(
+                    InvalidData(
+                        context=copy.deepcopy(ctx),
+                        log=copy.deepcopy(log),
+                        item=copy.deepcopy(item),
+                    )
+                )
+
         return res
+
+    @classmethod
+    def _apply_updates(cls, ctx: GoodsContext, logs: list[DatadogLog], checked_at: datetime) -> GoodsContext:
+        while logs and logs[0].request_time <= checked_at:
+            log: DatadogLog = logs.pop(0)
+            correct_price: int = cls.calc_correct_price(log=log)
+            ctx.goods_sno = log.goods_sno
+            ctx.correct_price = correct_price
+            ctx.price_origin = log.price_origin
+            ctx.consumer_origin = log.consumer_origin
+            ctx.discount_price = log.discount_price
+            ctx.discount_rate = log.discount_rate
+            ctx.discount_type = log.discount_type
+            ctx.updated_at = log.request_time
+            ctx.goods_sno = log.goods_sno
+        return ctx
+
+    @classmethod
+    def calc_correct_price(cls, log: DatadogLog) -> int:
+        consumer_origin: int = log.consumer_origin if log.consumer_origin > 0 else 0
+        price_origin: int = log.price_origin if log.price_origin > 0 else 0
+        if consumer_origin * price_origin != 0:
+            # 이미 할인판매가가 저장되어있다.
+            return min([consumer_origin, price_origin])
+
+        discount_price: int = log.discount_price if log.discount_price > 0 else 0
+        return (consumer_origin or price_origin) - discount_price
 
 
 if __name__ == '__main__':
@@ -204,11 +269,18 @@ if __name__ == '__main__':
     logs: list[DatadogLog] = LogReader.parse(
         lines=LogReader.read(filepaths=['data/spainshop1.csv', 'data/spainshop2.csv']),
     )
-    for log in logs[:5]:
-        print(log)
-    print('len(logs): ', len(logs))
-
     items: list[OrderItem] = ItemReader.parse(lines=ItemReader.read(filepaths=['data/spain_items.csv']))
-    for item in items:
-        print(item)
+    print('len(logs): ', len(logs))
     print('len(items): ', len(items))
+
+    invalids: list[InvalidData] = ItemAnalyzer.analyze(logs=logs, items=items)
+    # for invalid in invalids:
+    #     goods_name: str = invalid.context.goods_name
+    #     goods_sno: int = invalid.context.goods_sno
+    #     price: int = invalid.item.price
+    #     correct_price: int = invalid.context.correct_price
+    #     checked_at: datetime = invalid.item.checked_at
+    #     updated_at: datetime = invalid.context.updated_at
+    #     print(f'name: {goods_name}, sno: {goods_sno}, price: {price}, correct_price: {correct_price}, checked_at: {checked_at}, updated_at: {updated_at}')
+    print('len(invalids): ', len(invalids))
+    print('unique goods: ', len(set([invalid.context.goods_sno for invalid in invalids])))
